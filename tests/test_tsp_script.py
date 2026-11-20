@@ -34,6 +34,12 @@ function make_smu(name, cur)
       if k == "levelv" then table.insert(events, {name, v, clock}) end
     end}
   setmetatable(s.source, mt)
+  function s.measure.v(buf)
+    buf.n = buf.n + 1
+    buf.readings[buf.n] = 4.25
+    buf.timestamps[buf.n] = clock
+    buf.sourcevalues[buf.n] = 0
+  end
   function s.measure.i(buf)
     buf.n = buf.n + 1
     buf.readings[buf.n] = cur(s.source.levelv)
@@ -95,6 +101,17 @@ def test_fault_abort():
     print("fault abort OK")
 
 
+def test_voltage_mode():
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    lua.execute(STUBS)
+    lua.execute(TSP_SCRIPT)
+    lua.globals().gm_run(-3, 4, 0.02, 3, 1e-7, 3, 0, 0.006, 2)
+    bb = lua.globals().smub.nvbuffer1
+    assert bb.n == 6 and bb.readings[1] == 4.25
+    print("voltage mode OK")
+
+
 if __name__ == "__main__":
+    test_voltage_mode()
     test_completed_run()
     test_fault_abort()

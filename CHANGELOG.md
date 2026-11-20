@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-20.2
+
+- THz run: SMU B can read the SR830 X output as a voltmeter (source 0 A,
+  fixed 10 V range) at the end of every half period, so the existing 50 kHz
+  antenna reference stays untouched. New result: (X on - X off) / X off with
+  its standard error, each on reading compared with the mean of the
+  neighbouring off readings (cancels slow drift).
+- TSP gm_run: measd = 2 reads voltage on smub.
+- "SMU B reads" selector in the THz tab (SR830 output, drain current, nothing).
+
 ## 2026-11-20.1
 
 First version.

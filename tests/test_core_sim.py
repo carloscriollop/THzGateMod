@@ -56,7 +56,20 @@ def test_fault():
     print("fault:", res.note)
 
 
+def test_lockin():
+    dev = core.SimulatedGateMod()
+    p = core.SquareParams(smub_mode="lockin")
+    res = dev.run_square(p, 5, 600)
+    ls = core.lockin_stats(res, 3)
+    assert abs(ls.rel - 0.003) < 4 * ls.rel_err, (ls.rel, ls.rel_err)
+    print(f"lock-in: dX/X = {ls.rel*100:.3f} % +/- {ls.rel_err*100:.3f} % (true 0.300 %)")
+    with tempfile.TemporaryDirectory() as d:
+        core.write_run_csv(os.path.join(d, "x.csv"), p, res, "THz run")
+        assert "LockinOut_V" in open(os.path.join(d, "x.csv")).read()
+
+
 if __name__ == "__main__":
+    test_lockin()
     test_capacitance()
     test_checks()
     test_dc_sequence_and_files()

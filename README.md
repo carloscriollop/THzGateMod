@@ -6,8 +6,11 @@ films, with a Keithley 2636B in TSP mode and an SR830 lock-in.
 - SMU A (smua) drives the gate with a square wave between **V on** and
   **V off** (default −3 V and +4 V).
 - SMU B (smub) holds VDS on the drain and reads ID (optional).
-- A digital I/O line of the 2636B gives the lock-in a TTL reference, HIGH
-  during the V on half period.
+- In a THz run, SMU B can instead read the SR830 X output as a voltmeter, at
+  the end of every half period. The SR830 keeps its usual 50 kHz antenna
+  reference; the program compares the THz signal between the two gate states.
+- A digital I/O line of the 2636B gives a TTL signal, HIGH during the V on
+  half period (oscilloscope, or a second lock-in).
 
 The square wave runs inside the instrument as a TSP function
 (`gatemod_core.TSP_SCRIPT`), so its timing does not depend on Python or on
@@ -42,8 +45,8 @@ command mode. Tick **Simulate** to try the program without an instrument.
 |---|---|
 | SMU A HI | series resistor, then the gate (Si back contact) |
 | SMU A LO | source (common) |
-| SMU B HI | drain |
-| SMU B LO | source (common) |
+| SMU B HI | drain (DC test), or SR830 X output (THz run, lock-in mode) |
+| SMU B LO | source (common), or the shield of that BNC |
 | Digital I/O pin N (N = TTL line, 1 to 14) | BNC center, to SR830 REF IN |
 | Digital I/O ground (any of pins 15 to 21) | BNC shield |
 
@@ -92,31 +95,52 @@ so it is set much higher than for DC sweeps. Protection works differently:
 Files: `<sample>_sqw_<date>_<time>_<f>Hz.csv`, `..._summary.txt`,
 `<sample>_thzrun_<date>_<time>_<f>Hz.csv`, `<sample>_gateC_<date>_<time>.csv`.
 
-## SR830 settings for the THz run
+## THz run with the existing 50 kHz lock-in chain
 
-- Reference: Source External (INTERNAL LED off), Trig POS EDGE.
-- Time constant: about 10 periods or more (1 Hz: 10 to 30 s; 10 Hz: 1 to 3 s),
-  slope 24 dB/oct, sync filter on (below 200 Hz).
-- Phase: the rising edge marks the start of the V on half period. With the
-  phase zeroed on a real signal, X > 0 means the transmitted field is larger
-  during V on.
-- Square wave to amplitude: the lock-in reads the rms of the fundamental. A
-  square wave of peak-to-peak ΔE gives X = √2·ΔE/π, so **ΔE = π·X/√2 ≈ 2.22·X**.
+The antenna bias comes from a function generator at 50 kHz and the SR830 is
+locked to it. That stays as it is. The gate square wave is much slower
+(0.1 to 10 Hz), so the SR830 output simply follows the THz field and steps
+up and down with the gate. SMU B reads that output at the end of every half
+period, and the program computes (X on − X off) / X off, which is ΔE/E at the
+delay where the stage sits.
 
-With one SR830, the simplest scheme is the photoconductive antenna on DC
-bias and the lock-in referenced to the gate TTL: X then measures the change of
-the field directly. E itself (for ΔE/E) is measured separately, with the usual
-modulated-antenna scan.
+SR830:
+- Reference: unchanged (external, the 50 kHz from the generator). Check that
+  the INTERNAL LED is off and the frequency display reads 50 kHz.
+- Time constant **short compared with the half period**, so X settles within
+  each half: about 1/20 of the half period or less (10 Hz: 1 ms; 1 Hz: 10 ms),
+  24 dB/oct. The noise of each reading goes up, and averaging over many
+  cycles brings it back down.
+- Output: the rear-panel **X** BNC (or CH1 OUTPUT set to X, not Display); the
+  Display output updates too slowly for short time constants. Offset 0 and
+  Expand 1, so the program's X off is the real THz signal. Sensitivity such
+  that X is 50 to 90% of full scale, without overload.
+- X BNC center to SMU B HI, shield to SMU B LO. In the program: THz run tab,
+  "SMU B reads" = SR830 output (V), full scale 10 V.
+
+Result: the log and the plot title give ΔX/X with its uncertainty (scatter of
+the per-cycle values divided by √N). Each on reading is compared with the
+mean of the off readings just before and after it, so a slow drift of the
+THz power cancels.
+
+Controls that must give zero: beam blocked (pickup of the gate wave into the
+detection), gate amplitude zero (V on = V off is refused, so use ±0.01 V),
+and the same run on HfO2 on Si without nanotubes (substrate contribution).
+
+The TTL line is not needed for this scheme (the SR830 reference input is
+busy with the 50 kHz); use it on an oscilloscope to check the gate timing.
 
 ## First-use checks (no sample)
 
 1. Connect: no error when the script loads.
 2. Dummy gate: a 100 nF capacitor between SMU A HI (through the series
    resistor) and LO. Measure C: should read about 100 nF.
-3. THz run at 1 Hz for 30 s with the drain unticked, TTL on line 1, an
+3. THz run at 1 Hz for 30 s with "SMU B reads" = Nothing, TTL on line 1, an
    oscilloscope on the gate and on the TTL: square wave between V on and V off,
    TTL high during V on.
-4. Press Stop in the middle of a run: the gate must go to 0 V within about a
+4. Lock-in mode on the bench: a DC voltage (for example 5 V from a supply, or
+   the SR830 AUX OUT) on SMU B; the THz run should report ΔX/X ≈ 0.
+5. Press Stop in the middle of a run: the gate must go to 0 V within about a
    second.
-5. Fault test: replace the capacitor by a 10 MΩ resistor (|IG| = 0.3 to 0.4 µA,
+6. Fault test: replace the capacitor by a 10 MΩ resistor (|IG| = 0.3 to 0.4 µA,
    above the 100 nA limit): the run must abort after three half periods.

@@ -57,6 +57,8 @@ def parse_freqs(text):
 
 
 class App(tk.Tk):
+    SMUB_MODES = {"SR830 output (V)": "lockin", "Drain current (A)": "drain", "Nothing": "off"}
+
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
@@ -181,10 +183,16 @@ class App(tk.Tk):
         entry(thz, "Frequency (Hz)", "thz_f", 2.0, 0, 0)
         entry(thz, "Duration (s)", "thz_dur", 600, 1, 0)
         entry(thz, "TTL line (1-14)", "dio_line", 1, 2, 0)
-        ttk.Label(thz, text="TTL line HIGH during the V on half period. Wire it to the SR830\n"
-                            "REF IN (external reference, TTL rising edge).",
-                  foreground="#6b7280").grid(row=3, column=0, columnspan=2, sticky="w")
-        ttk.Button(thz, text="Start THz run", command=self.on_start_thz).grid(row=4, column=0, sticky="w",
+        ttk.Label(thz, text="SMU B reads").grid(row=3, column=0, sticky="w", pady=2)
+        self.var_smub = self._var("smub_mode", "SR830 output (V)")
+        ttk.Combobox(thz, textvariable=self.var_smub, values=list(self.SMUB_MODES), width=18,
+                     state="readonly").grid(row=3, column=1, sticky="w")
+        entry(thz, "SR830 output full scale (V)", "lockin_vmax", 10, 4, 0)
+        ttk.Label(thz, text="SR830 stays on the 50 kHz antenna reference with a short time\n"
+                            "constant; its CH1 OUTPUT (X) goes to SMU B, which reads it at the end\n"
+                            "of every half period. The TTL line is for an oscilloscope.",
+                  foreground="#6b7280").grid(row=5, column=0, columnspan=2, sticky="w")
+        ttk.Button(thz, text="Start THz run", command=self.on_start_thz).grid(row=6, column=0, sticky="w",
                                                                               pady=(6, 0))
         ttk.Button(left, text="Stop", command=self.on_stop).pack(fill="x")
         self.var_status = tk.StringVar(value="Ready.")
@@ -236,7 +244,9 @@ class App(tk.Tk):
             range_drain=g("range_drain"), nplc=g("nplc"), i_fault=g("i_fault"),
             n_viol=int(g("n_viol")), r_series=g("r_series"),
             c_gate=float(c_txt) * 1e-9 if c_txt else None,
-            measure_drain=bool(self.var_drain.get()),
+            smub_mode=(self.SMUB_MODES[self.var_smub.get()] if dio
+                       else ("drain" if self.var_drain.get() else "off")),
+            lockin_vmax=g("lockin_vmax"),
             dio_line=int(g("dio_line")) if dio else 0, line_freq=g("line_freq"))
         if p.v_on == p.v_off:
             raise ValueError("V on and V off are equal.")
@@ -397,7 +407,7 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Parameters", str(e))
             return
-        if not p.measure_drain:
+        if p.smub_mode != "drain":
             messagebox.showerror("DC test", "The DC test needs the drain wired (ID on SMU B).")
             return
         bad = [m for ok, m in (core.check_frequency(p, f) for f in freqs) if not ok]
@@ -456,10 +466,10 @@ class App(tk.Tk):
 
     def _plot_dc(self, res, stats):
         self.ax1.clear()
-        if res.idrain is not None and len(res.t):
+        if res.sb is not None and len(res.t):
             on = np.arange(len(res.t)) % 2 == 0
-            self.ax1.plot(res.t[on], res.idrain[on] * 1e6, "o-", ms=3, color=BLUE, label="end of V on")
-            self.ax1.plot(res.t[~on], res.idrain[~on] * 1e6, "s-", ms=3, color=ORANGE, label="end of V off")
+            self.ax1.plot(res.t[on], res.sb[on] * 1e6, "o-", ms=3, color=BLUE, label="end of V on")
+            self.ax1.plot(res.t[~on], res.sb[~on] * 1e6, "s-", ms=3, color=ORANGE, label="end of V off")
             self.ax1.set_xlabel("time (s)")
             self.ax1.set_ylabel("ID (uA)")
             self.ax1.set_title(f"{res.freq:g} Hz")
@@ -493,7 +503,7 @@ class App(tk.Tk):
         n_cyc = max(1, int(round(dur * f)))
         if not messagebox.askokcancel(
                 "THz run", f"Square wave {p.v_on:g} / {p.v_off:g} V at {f:g} Hz for {n_cyc/f:.0f} s, "
-                           f"TTL on digital I/O line {p.dio_line}.\n\nSR830: Source External, Trig POS EDGE.\n"
+                           f"TTL on digital I/O line {p.dio_line}. SMU B reads: {self.var_smub.get()}.\n\n"
                            f"The program waits until the run ends; Stop aborts it."):
             return
         self._save_settings()
@@ -508,11 +518,17 @@ class App(tk.Tk):
             self._status(f"THz run: {f:g} Hz until {time.strftime('%H:%M:%S', time.localtime(time.time() + n_cyc / f))}...")
             res = self.dev.run_square(p, f, n_cyc)
             core.write_run_csv(stem + ".csv", p, res, "THz run")
-            st = core.cycle_stats(res, 3)
-            self._post(lambda: self._plot_thz(res))
+            if p.smub_mode == "lockin":
+                ls = core.lockin_stats(res, 3)
+                extra = (f"; lock-in (X on - X off)/X off = {ls.rel*100:.3f} % +/- {ls.rel_err*100:.3f} % "
+                         f"over {ls.n_cycles_used} cycles" if ls else "")
+            else:
+                st = core.cycle_stats(res, 3)
+                extra = f"; ID on/off during the run {st.ratio:.3f}" if st else ""
+                ls = None
+            self._post(lambda: self._plot_thz(res, ls))
             msg = ["completed", "ABORTED on gate fault: " + res.note, "stopped by user"][res.status]
-            self._say(f"THz run {msg}. Saved {os.path.basename(stem)}.csv"
-                      + (f"; ID on/off during the run {st.ratio:.3f}" if st else ""))
+            self._say(f"THz run {msg}. Saved {os.path.basename(stem)}.csv" + extra)
         except Exception as e:
             self._say(f"Error: {e}")
         finally:
@@ -522,15 +538,19 @@ class App(tk.Tk):
                 pass
         self._status("THz run finished.")
 
-    def _plot_thz(self, res):
+    def _plot_thz(self, res, ls=None):
         self.ax1.clear()
         on = np.arange(len(res.t)) % 2 == 0
-        if res.idrain is not None:
-            self.ax1.plot(res.t[on], res.idrain[on] * 1e6, ".", ms=2, color=BLUE, label="end of V on")
-            self.ax1.plot(res.t[~on], res.idrain[~on] * 1e6, ".", ms=2, color=ORANGE, label="end of V off")
-            self.ax1.set_ylabel("ID (uA)")
+        if res.sb is not None:
+            k, unit = (1.0, "lock-in output (V)") if res.smub_mode == "lockin" else (1e6, "ID (uA)")
+            self.ax1.plot(res.t[on], res.sb[on] * k, ".", ms=2, color=BLUE, label="end of V on")
+            self.ax1.plot(res.t[~on], res.sb[~on] * k, ".", ms=2, color=ORANGE, label="end of V off")
+            self.ax1.set_ylabel(unit)
             self.ax1.legend(fontsize=8)
-        self.ax1.set_title(f"THz run, {res.freq:g} Hz")
+        title = f"THz run, {res.freq:g} Hz"
+        if ls:
+            title += f":  dX/X = {ls.rel*100:.3f} % +/- {ls.rel_err*100:.3f} %"
+        self.ax1.set_title(title)
         self.ax2.clear()
         self.ax2.plot(res.t, np.abs(res.ig) * 1e9, ".", ms=2, color=GRAY)
         self.ax2.set_xlabel("time (s)")

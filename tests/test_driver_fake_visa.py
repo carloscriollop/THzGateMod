@@ -59,7 +59,7 @@ def test_driver():
     res = dev.run_square(p, 10, 3)
     assert res.status == 0 and len(res.t) == 6
     assert list(res.vset) == [-3, 4, -3, 4, -3, 4]
-    assert abs(res.idrain[0] - 9e-6) < 1e-12 and abs(res.idrain[1] - 5e-6) < 1e-12
+    assert abs(res.sb[0] - 9e-6) < 1e-12 and abs(res.sb[1] - 5e-6) < 1e-12
     run_cmd = [x for x in w if x.startswith("gm_run(")][0]
     assert ", 2, " in run_cmd, run_cmd           # TTL line passed
     assert fv.timeout == 20000                    # timeout restored
@@ -68,5 +68,21 @@ def test_driver():
     print("driver OK:", run_cmd)
 
 
+def test_driver_lockin():
+    fv = FakeVisa(n=4)
+    dev = core.K2636BGateMod(fv)
+    p = core.SquareParams(smub_mode="lockin", ramp_delay=0)
+    dev.init_square(p)
+    w = fv.writes
+    assert "smub.source.func = smub.OUTPUT_DCAMPS" in w and "smub.source.leveli = 0" in w
+    assert "smub.measure.rangev = 10.0" in w
+    assert not any(x.startswith("smub.source.levelv") for x in w)   # no drain ramp
+    dev.run_square(p, 10, 2)
+    run_cmd = [x for x in fv.writes if x.startswith("gm_run(")][0]
+    assert run_cmd.endswith(", 2)"), run_cmd                          # measd = 2 -> voltage
+    print("driver lock-in OK:", run_cmd)
+
+
 if __name__ == "__main__":
     test_driver()
+    test_driver_lockin()

@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-APP_VERSION = "2026-11-20.1"
+APP_VERSION = "2026-11-20.2"
 
 # ---------------------------------------------------------------------------
 # TSP code loaded into the instrument.
@@ -37,10 +37,11 @@ APP_VERSION = "2026-11-20.1"
 #             reference rising edge marks the start of each vl half.
 #   tmeas   : time reserved before the end of each half period for the
 #             readings (s).
-#   measd   : 1 = also read ID on smub, 0 = gate only (drain not wired).
+#   measd   : what smub reads at the end of each half period:
+#             0 = nothing, 1 = drain current (ID), 2 = voltage (lock-in output).
 #
 # Readings go to smua.nvbuffer1 (IG, with source values and timestamps) and,
-# if measd = 1, smub.nvbuffer1 (ID). One reading per channel per half period.
+# if measd > 0, smub.nvbuffer1 (ID or volts). One reading per channel per half period.
 # Prints "status n": status 0 = completed, 1 = aborted on gate fault.
 # The gate is left at 0 V and the TTL line low.
 # ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ function gm_run(vl, vh, half, ncyc, ifault, nviol, line, tmeas, measd)
     tnext = tnext + half
     while timer.measure.t() < tnext - tmeas do end
     smua.measure.i(ba)
-    if measd == 1 then smub.measure.i(bb) end
+    if measd == 1 then smub.measure.i(bb) elseif measd == 2 then smub.measure.v(bb) end
     if math.abs(ba.readings[ba.n]) > ifault then viol = viol + 1 else viol = 0 end
     if viol >= nviol then
       status = 1
@@ -99,7 +100,8 @@ class SquareParams:
     n_viol: int = 3             # consecutive faulty half periods that abort
     r_series: float = 0.0       # resistor in series with the gate (ohm), for checks only
     c_gate: Optional[float] = None  # measured gate capacitance (F), for checks
-    measure_drain: bool = True
+    smub_mode: str = "drain"    # "drain" (ID), "lockin" (SR830 output voltage) or "off"
+    lockin_vmax: float = 10.0   # full scale of the lock-in output (V)
     dio_line: int = 0           # 0 = no TTL reference
     line_freq: float = 60.0     # power-line frequency (Hz)
     ramp_step: float = 0.02
@@ -108,6 +110,15 @@ class SquareParams:
     @property
     def dv(self):
         return abs(self.v_off - self.v_on)
+
+    @property
+    def measure_drain(self):
+        """True when SMU B takes a reading (drain current or lock-in voltage)."""
+        return self.smub_mode != "off"
+
+    @property
+    def measd_code(self):
+        return {"off": 0, "drain": 1, "lockin": 2}[self.smub_mode]
 
 
 @dataclass
@@ -118,9 +129,10 @@ class RunResult:
     t: np.ndarray               # time of each reading (s)
     vset: np.ndarray            # programmed gate level of each reading (V)
     ig: np.ndarray              # gate current at the end of each half period (A)
-    idrain: Optional[np.ndarray]  # drain current at the end of each half period (A)
+    sb: Optional[np.ndarray]    # SMU B reading at the end of each half period (A or V)
     started: str = ""
     note: str = ""
+    smub_mode: str = "drain"
 
 
 @dataclass
@@ -203,11 +215,11 @@ def cycle_stats(res: RunResult, skip_cycles: int = 3) -> Optional[CycleStats]:
     skip_cycles cycles are left out: right after the gate starts switching,
     the trapped charge has not settled into its periodic state yet.
     """
-    if res.idrain is None or len(res.idrain) < 2:
+    if res.sb is None or len(res.sb) < 2:
         return None
-    n_cyc = len(res.idrain) // 2
-    i_on = res.idrain[0:2 * n_cyc:2]
-    i_off = res.idrain[1:2 * n_cyc:2]
+    n_cyc = len(res.sb) // 2
+    i_on = res.sb[0:2 * n_cyc:2]
+    i_off = res.sb[1:2 * n_cyc:2]
     s = min(skip_cycles, max(n_cyc - 1, 0))
     i_on, i_off = i_on[s:], i_off[s:]
     if len(i_on) == 0:
@@ -222,6 +234,39 @@ def cycle_stats(res: RunResult, skip_cycles: int = 3) -> Optional[CycleStats]:
         ratio_last=float(np.mean(i_on[-k:]) / np.mean(i_off[-k:])),
         ig_max=float(np.max(np.abs(res.ig))) if len(res.ig) else math.nan,
     )
+
+
+@dataclass
+class LockinStats:
+    freq: float
+    n_cycles_used: int
+    x_on: float                 # mean lock-in output at the end of the on half periods (V)
+    x_off: float                # mean lock-in output at the end of the off half periods (V)
+    rel: float                  # (X on - X off) / X off, drift-corrected
+    rel_err: float              # standard error of rel (one standard deviation of the mean)
+
+
+def lockin_stats(res: RunResult, skip_cycles: int = 3) -> Optional[LockinStats]:
+    """
+    Relative change of the lock-in output between the two gate states.
+    Each on reading is compared with the mean of the off readings just
+    before and just after it, so a slow drift of the THz signal cancels.
+    rel_err is the scatter of these per-cycle values divided by sqrt(N): it
+    shrinks as the run gets longer.
+    """
+    x = res.sb
+    if x is None or len(x) < 4:
+        return None
+    n_cyc = len(x) // 2
+    x_on, x_off = x[0:2 * n_cyc:2], x[1:2 * n_cyc:2]
+    s = max(1, min(skip_cycles, n_cyc - 2))
+    ref = float(np.mean(x_off[s:]))
+    if ref == 0:
+        return None
+    d = np.array([x_on[k] - 0.5 * (x_off[k - 1] + x_off[k]) for k in range(s, n_cyc)]) / ref
+    err = float(np.std(d, ddof=1) / np.sqrt(len(d))) if len(d) > 1 else math.nan
+    return LockinStats(freq=res.freq, n_cycles_used=len(d), x_on=float(np.mean(x_on[s:])),
+                       x_off=ref, rel=float(np.mean(d)), rel_err=err)
 
 
 def capacitance_from_ramps(t_up, v_up, t_dn, v_dn, i0):
@@ -260,7 +305,7 @@ def header_lines(p: SquareParams, res: RunResult, mode: str):
         f"f={res.freq:g} Hz, half={res.half:g} s",
         "# " + ", ".join(f"{k}={d[k]}" for k in
                          ("vds", "comp_gate", "comp_drain", "range_drain", "nplc", "i_fault",
-                          "n_viol", "r_series", "c_gate", "measure_drain", "dio_line")),
+                          "n_viol", "r_series", "c_gate", "smub_mode", "lockin_vmax", "dio_line")),
         f"# Status: {['completed', 'aborted on gate fault', 'stopped by user'][res.status]}"
         + (f" ({res.note})" if res.note else ""),
         "# One row per half period, read at its end. Phase: on = v_on half, off = v_off half.",
@@ -272,9 +317,10 @@ def write_run_csv(path, p: SquareParams, res: RunResult, mode: str):
         for line in header_lines(p, res, mode):
             fh.write(line + "\n")
         w = csv.writer(fh)
-        w.writerow(["Index", "Cycle", "Phase", "Time_s", "VG_set_V", "IG_A", "ID_A"])
+        col = {"drain": "ID_A", "lockin": "LockinOut_V"}.get(res.smub_mode, "SMUB")
+        w.writerow(["Index", "Cycle", "Phase", "Time_s", "VG_set_V", "IG_A", col])
         for k in range(len(res.t)):
-            idv = "" if res.idrain is None else f"{res.idrain[k]:.7e}"
+            idv = "" if res.sb is None else f"{res.sb[k]:.7e}"
             w.writerow([k, k // 2, "on" if k % 2 == 0 else "off", f"{res.t[k]:.6f}",
                         f"{res.vset[k]:.6g}", f"{res.ig[k]:.6e}", idv])
 
@@ -384,24 +430,35 @@ class K2636BGateMod:
         w("smua.sense = smua.SENSE_LOCAL")
         w("smua.source.levelv = 0")
         w("smub.reset()")
-        w("smub.source.func = smub.OUTPUT_DCVOLTS")
-        w("smub.source.autorangev = smub.AUTORANGE_ON")
-        w(f"smub.source.limiti = {p.comp_drain}")
-        w("smub.measure.autorangei = smub.AUTORANGE_OFF")
-        w(f"smub.measure.rangei = {p.range_drain}")
+        if p.smub_mode == "lockin":
+            # Voltmeter: source 0 A, voltage limit above the lock-in full scale,
+            # fixed voltage range. The SMU draws no current from the lock-in output.
+            w("smub.source.func = smub.OUTPUT_DCAMPS")
+            w("smub.source.leveli = 0")
+            w(f"smub.source.limitv = {1.5 * p.lockin_vmax}")
+            w("smub.measure.autorangev = smub.AUTORANGE_OFF")
+            w(f"smub.measure.rangev = {p.lockin_vmax}")
+        else:
+            w("smub.source.func = smub.OUTPUT_DCVOLTS")
+            w("smub.source.autorangev = smub.AUTORANGE_ON")
+            w(f"smub.source.limiti = {p.comp_drain}")
+            w("smub.measure.autorangei = smub.AUTORANGE_OFF")
+            w(f"smub.measure.rangei = {p.range_drain}")
+            w("smub.source.levelv = 0")
         w(f"smub.measure.nplc = {p.nplc}")
         w("smub.measure.autozero = smub.AUTOZERO_ONCE")
         w("smub.sense = smub.SENSE_LOCAL")
-        w("smub.source.levelv = 0")
         if p.dio_line:
             w(f"digio.writebit({int(p.dio_line)}, 0)")
         errs = self.drain_errors()
         if errs:
             raise RuntimeError("Configuration errors, outputs left OFF:\n" + "\n".join(errs))
         w("smua.source.output = smua.OUTPUT_ON")
-        if p.measure_drain:
+        if p.smub_mode == "drain":
             w("smub.source.output = smub.OUTPUT_ON")
             self.ramp("smub", p.vds, p.ramp_step, p.ramp_delay)
+        elif p.smub_mode == "lockin":
+            w("smub.source.output = smub.OUTPUT_ON")
 
     # --- capacitance ---
     def measure_capacitance(self, i0=20e-9, vmax=1.0, timeout=60.0, poll=0.05, stop=None):
@@ -466,7 +523,7 @@ class K2636BGateMod:
         try:
             ans = self._q(f"gm_run({p.v_on}, {p.v_off}, {half}, {int(n_cycles)}, {p.i_fault}, "
                           f"{int(p.n_viol)}, {int(p.dio_line)}, {t_meas(p)}, "
-                          f"{1 if p.measure_drain else 0})")
+                          f"{p.measd_code})")
             parts = ans.replace(",", " ").split()
             status = int(float(parts[0]))
         except Exception as e:
@@ -479,7 +536,7 @@ class K2636BGateMod:
         if status == 1:
             note = (f"|IG| above {p.i_fault:g} A at the end of {p.n_viol} consecutive half periods")
         return RunResult(freq=freq, half=half, status=status, t=t, vset=vset, ig=ig,
-                         idrain=idr, started=started, note=note)
+                         sb=idr, started=started, note=note, smub_mode=p.smub_mode)
 
     def read_buffers(self, measure_drain, chunk=500):
         n = int(float(self._q("print(smua.nvbuffer1.n)")))
@@ -516,7 +573,7 @@ class K2636BGateMod:
                     pass
 
     def zero_and_off(self, p: SquareParams):
-        for node in ("smua", "smub"):
+        for node in ("smua",) if p.smub_mode == "lockin" else ("smua", "smub"):
             try:
                 self.ramp(node, 0.0, p.ramp_step, p.ramp_delay)
             except Exception:
@@ -585,6 +642,9 @@ class SimulatedGateMod:
             if self.fault_after is not None and k >= self.fault_after:
                 i_g = 1e-6
             i_d = self.i0 - self.g * (v - self.vt) + self.rng.normal(0, 2e-9)
+            if p.smub_mode == "lockin":
+                # THz signal near 5 V full scale: 0.3 % larger in the on state, slow drift, noise
+                i_d = 5.0 * (1 + 0.003 * (k % 2 == 0) + 2e-4 * tk / 60) + self.rng.normal(0, 0.01)
             t.append(tk)
             vs.append(v)
             ig.append(i_g)
@@ -595,8 +655,8 @@ class SimulatedGateMod:
                 break
         self.vt *= math.exp(-2.0 / self.tau)
         return RunResult(freq=freq, half=half, status=status, t=np.array(t), vset=np.array(vs),
-                         ig=np.array(ig), idrain=np.array(idr) if p.measure_drain else None,
-                         started=started, note=note)
+                         ig=np.array(ig), sb=np.array(idr) if p.measure_drain else None,
+                         started=started, note=note, smub_mode=p.smub_mode)
 
     def abort(self):
         self._stop = True
