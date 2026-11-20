@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-APP_VERSION = "2026-11-20.4"
+APP_VERSION = "2026-11-20.5"
 
 # ---------------------------------------------------------------------------
 # TSP code loaded into the instrument.
@@ -51,9 +51,11 @@ function gm_run(vl, vh, half, ncyc, ifault, nviol, line, tmeas, measd)
   local ba = smua.nvbuffer1
   local bb = smub.nvbuffer1
   ba.clear()
+  ba.appendmode = 1
   ba.collecttimestamps = 1
   ba.collectsourcevalues = 1
   bb.clear()
+  bb.appendmode = 1
   bb.collecttimestamps = 1
   local viol = 0
   local status = 0

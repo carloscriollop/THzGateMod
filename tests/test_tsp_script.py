@@ -35,12 +35,14 @@ function make_smu(name, cur)
     end}
   setmetatable(s.source, mt)
   function s.measure.v(buf)
+    if buf.appendmode ~= 1 then buf.clear() end  -- 2600B default: overwrite
     buf.n = buf.n + 1
     buf.readings[buf.n] = 4.25
     buf.timestamps[buf.n] = clock
     buf.sourcevalues[buf.n] = 0
   end
   function s.measure.i(buf)
+    if buf.appendmode ~= 1 then buf.clear() end  -- 2600B default: overwrite
     buf.n = buf.n + 1
     buf.readings[buf.n] = cur(s.source.levelv)
     buf.timestamps[buf.n] = clock

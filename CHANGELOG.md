@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-20.5
+
+- Fix: only one reading per run was kept. The 2600B buffers overwrite by
+  default (appendmode 0); gm_run now sets appendmode = 1 on both buffers.
+  The Lua stubs in the tests now model the overwrite default.
+
 ## 2026-11-20.4
 
 - Fix: the instrument rejected the TSP script ("')' expected near '%'").
