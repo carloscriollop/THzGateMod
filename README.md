@@ -111,6 +111,12 @@ SR830:
   each half: about 1/20 of the half period or less (10 Hz: 1 ms; 1 Hz: 10 ms),
   24 dB/oct. The noise of each reading goes up, and averaging over many
   cycles brings it back down.
+  With the time constant the THz setup normally uses (100 ms, 24 dB/oct) the
+  output needs about 10 time constants, about 1 s, to reach the new value,
+  so each gate state must last 2 s: gate frequency 0.25 Hz (the default in
+  the THz run tab). At 12 dB/oct it settles in about 0.7 s and 0.5 Hz works.
+  On the first run, check in the plot that X is flat before each gate switch;
+  if it is still moving, lower the frequency.
 - Output: the rear-panel **X** BNC (or CH1 OUTPUT set to X, not Display); the
   Display output updates too slowly for short time constants. Offset 0 and
   Expand 1, so the program's X off is the real THz signal. Sensitivity such

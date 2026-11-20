@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-20.3
+
+- THz run default frequency 0.25 Hz, which fits the SR830 time constant the
+  THz setup normally uses (100 ms, 24 dB/oct). README explains the settling
+  rule and how to check it on the first run.
+
 ## 2026-11-20.2
 
 - THz run: SMU B can read the SR830 X output as a voltmeter (source 0 A,

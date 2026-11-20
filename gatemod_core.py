@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-APP_VERSION = "2026-11-20.2"
+APP_VERSION = "2026-11-20.3"
 
 # ---------------------------------------------------------------------------
 # TSP code loaded into the instrument.

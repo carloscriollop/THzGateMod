@@ -180,7 +180,7 @@ class App(tk.Tk):
         bf.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Button(bf, text="Check frequencies", command=self.on_check).pack(side="left")
         ttk.Button(bf, text="Start DC test", command=self.on_start_dc).pack(side="left", padx=6)
-        entry(thz, "Frequency (Hz)", "thz_f", 2.0, 0, 0)
+        entry(thz, "Frequency (Hz)", "thz_f", 0.25, 0, 0)
         entry(thz, "Duration (s)", "thz_dur", 600, 1, 0)
         entry(thz, "TTL line (1-14)", "dio_line", 1, 2, 0)
         ttk.Label(thz, text="SMU B reads").grid(row=3, column=0, sticky="w", pady=2)
