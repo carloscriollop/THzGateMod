@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-20.4
+
+- Fix: the instrument rejected the TSP script ("')' expected near '%'").
+  The 2636B runs Lua 5.0, which has no % operator; the on/off phase is now a
+  toggle. New test checks the script for Lua 5.1-only operators.
+
 ## 2026-11-20.3
 
 - THz run default frequency 0.25 Hz, which fits the SR830 time constant the

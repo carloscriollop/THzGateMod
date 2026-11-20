@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-APP_VERSION = "2026-11-20.3"
+APP_VERSION = "2026-11-20.4"
 
 # ---------------------------------------------------------------------------
 # TSP code loaded into the instrument.
@@ -58,9 +58,10 @@ function gm_run(vl, vh, half, ncyc, ifault, nviol, line, tmeas, measd)
   local viol = 0
   local status = 0
   local tnext = 0
+  local on = false
   timer.reset()
   for k = 1, 2 * ncyc do
-    local on = (k % 2 == 1)
+    on = not on
     if on then smua.source.levelv = vl else smua.source.levelv = vh end
     if line > 0 then
       if on then digio.writebit(line, 1) else digio.writebit(line, 0) end

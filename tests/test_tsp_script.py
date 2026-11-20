@@ -111,7 +111,18 @@ def test_voltage_mode():
     print("voltage mode OK")
 
 
+def test_lua50_compatible():
+    """The 2636B runs Lua 5.0: no % operator, no # length operator."""
+    import re
+    import gatemod_core as core
+    code = "\n".join(l.split("--")[0] for l in core.TSP_SCRIPT.splitlines())
+    assert "%" not in code, "Lua 5.0 has no % operator; use a toggle or math.mod"
+    assert not re.search(r"#\w", code), "Lua 5.0 has no # length operator"
+
+
 if __name__ == "__main__":
     test_voltage_mode()
     test_completed_run()
     test_fault_abort()
+    test_lua50_compatible()
+
